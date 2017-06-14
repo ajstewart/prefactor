@@ -64,7 +64,7 @@ def input2int(invar):
 
     
 def main(ms_input, filename=None, mapfile_dir=None, numSB=-1, hosts=None, NDPPPfill=True, target_path=None, stepname=None,
-         mergeLastGroup=False, truncateLastSBs=True, firstSB=None):
+         mergeLastGroup=False, truncateLastSBs=True, firstSB=None, natural=False, naturalGap=20.0):
     """
     Check a list of MS files for missing frequencies
 
@@ -107,6 +107,12 @@ def main(ms_input, filename=None, mapfile_dir=None, numSB=-1, hosts=None, NDPPPf
         If set, then reference the grouping of files to this station-subband. As if a file 
         with this station-subband would be included in the input files.
         (For HBA-low, i.e. 0 -> 100MHz, 55 -> 110.74MHz, 512 -> 200MHz)
+    natural : bool, optional
+         For use when the frequency range observed is not continuous, and bands occur naturally.
+         Will attempt to only band within the frequency ranges present in the script.
+    naturalGap : float, optional
+         When using natural mode, this chooses the size of the gap (naturalGap*SB_bandwidth) 
+         for which anything larger than is considered the start of a new band.
 
     Returns
     -------
@@ -120,6 +126,8 @@ def main(ms_input, filename=None, mapfile_dir=None, numSB=-1, hosts=None, NDPPPf
     truncateLastSBs = input2bool(truncateLastSBs)
     firstSB = input2int(firstSB)
     numSB = int(numSB)
+    natural = input2bool(natural)
+    naturalGap = float(naturalGap)
 
     if not filename or not mapfile_dir:
         raise ValueError('sort_times_into_freqGroups: filename and mapfile_dir are needed!')
@@ -198,7 +206,6 @@ def main(ms_input, filename=None, mapfile_dir=None, numSB=-1, hosts=None, NDPPPf
         #time_groups[time]['files'] = [name for (freq,name) in freq_names]
         #time_groups[time]['freqs'] = [freq for (freq,name) in freq_names]
     print "sort_times_into_freqGroups: Collected the frequencies for the time-groups"
-
     freqliste = np.array(list(freqset))
     freqliste.sort()
     freq_width = np.min(freqliste[1:]-freqliste[:-1])
@@ -230,7 +237,25 @@ def main(ms_input, filename=None, mapfile_dir=None, numSB=-1, hosts=None, NDPPPf
     groupBW = freq_width*numSB
     if groupBW < 1e6:
         print 'sort_times_into_freqGroups: ***WARNING***: Bandwidth of concatenated MS is lower than 1 MHz. This may cause conflicts with the concatenated file names!'
-    freqborders = np.arange(minfreq,maxfreq,groupBW)
+    if not natural:
+        freqborders = np.arange(minfreq,maxfreq,groupBW)
+    else:
+        freqborders=[]
+        for fq in range(len(freqliste)):
+            if fq==0:
+                freqborders.append(freqliste[fq]-(freq_width*0.5))
+                continue
+            if fq==len(freqs)-1:
+                freqborders.append(freqliste[fq]+(freq_width*0.5))
+                continue
+            thisfreq=freqliste[fq]
+            nextfreq=freqliste[fq+1]
+            if (nextfreq-thisfreq)>freq_width*naturalGap:
+                freqborders.append(thisfreq+(freq_width*0.5))
+                freqborders.append(nextfreq-(freq_width*0.5))
+        freqborders=np.array(freqborders)
+        print "Natural mode banding active. Frequency borders are: {}".format(freqborders) 
+                
     if mergeLastGroup:
         freqborders[-1] = maxfreq
     elif truncateLastSBs:
@@ -239,6 +264,7 @@ def main(ms_input, filename=None, mapfile_dir=None, numSB=-1, hosts=None, NDPPPf
         freqborders = np.append(freqborders,(freqborders[-1]+groupBW))
     elif not truncateLastSBs and not NDPPPfill:
         freqborders = np.append(freqborders,maxfreq)
+        
 
     freqborders = freqborders[freqborders>(np.min(freqliste)-groupBW)]
     ngroups = len(freqborders)-1
@@ -389,6 +415,8 @@ if __name__ == '__main__':
     opt.add_option('-d', '--decimate', help='Remove every 10th file (after randomization if that is done). (default=False)', action='store_true', default=False)
     opt.add_option('-n', '--numbands', help='Number of how many files should be grouped together in frequency. (default=all files in one group)', type='int', default=-1)
     opt.add_option('-f', '--filename', help='Name for the mapfiles to write. (default=\"test.mapfile\")', type='string', default='test.mapfile')
+    opt.add_option('--natural', help='Use if the frequency range observed is not continuous and bands are naturally separated', action='store_true', default=False)
+    opt.add_option('--naturalGap', help='Use with natural mode to control the gap as multiple of SB_bandwidth (naturalGap*SB_bandwidth) that is considered the start of a new band.', type='int', default=20.)
 
     (options, args) = opt.parse_args()
 
@@ -405,7 +433,7 @@ if __name__ == '__main__':
         for i in range((len(inMSs)-1),-1,-10):
             inMSs.pop(i)
 
-    ergdict = main(inMSs, options.filename, '.', numSB=options.numbands, hosts=None, NDPPPfill=True)
+    ergdict = main(inMSs, options.filename, '.', numSB=options.numbands, hosts=None, NDPPPfill=True, natural=options.natural, naturalGap=options.naturalGap)
 
     groupmap = DataMap.load(ergdict['groupmapfile'])
     filemap = MultiDataMap.load(ergdict['mapfile'])
